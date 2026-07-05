@@ -17,12 +17,43 @@ fi
 
 echo "Clone openc3-cosmos into local user directory..."
 cd $USER_NOS3_DIR
-git clone https://github.com/nasa-itc/openc3-nos3.git --depth 1 -b main $USER_NOS3_DIR/cosmos
+git clone https://github.com/PinakSharmaa/cosmos-project-v7.1.0 --depth 1 -b main $USER_NOS3_DIR/cosmos
 echo ""
 
 echo "Prepare openc3-cosmos containers..."
 cd $OPENC3_DIR
 $OPENC3_PATH run
+echo ""
+
+echo "Waiting for OpenC3 init container to complete..."
+
+for i in {1..180}
+do
+    status=$(docker inspect cosmos-openc3-cosmos-init-1 --format '{{.State.Status}}' 2>/dev/null || true)
+    exit_code=$(docker inspect cosmos-openc3-cosmos-init-1 --format '{{.State.ExitCode}}' 2>/dev/null || true)
+
+    if [ "$status" = "exited" ] && [ "$exit_code" = "0" ]; then
+        echo "OpenC3 init completed successfully."
+        break
+    fi
+
+    if [ "$status" = "exited" ] && [ "$exit_code" != "0" ]; then
+        echo ""
+        echo "ERROR: OpenC3 init failed."
+        docker logs cosmos-openc3-cosmos-init-1 --tail 150
+        exit 1
+    fi
+
+    if [ "$i" -eq 180 ]; then
+        echo ""
+        echo "ERROR: Timed out waiting for OpenC3 init to complete."
+        docker logs cosmos-openc3-cosmos-init-1 --tail 150
+        exit 1
+    fi
+
+    sleep 2
+done
+
 echo ""
 
 #echo "Set a password in openc3-cosmos via firefox..."
@@ -60,21 +91,21 @@ fi
 mkdir openc3-cosmos-nos3/targets
 cd openc3-cosmos-nos3/targets
 targets=""
-for i in $(find $BASE_DIR/components -name target.txt) 
-do 
+for i in $(find $BASE_DIR/components -name target.txt)
+do
     j=$(dirname $i)
     cp -r $j .
     targets="$targets $(basename $j)"
 done
-for i in $(find $GSW_DIR/config/targets -name target.txt) 
-do 
+for i in $(find $GSW_DIR/config/targets -name target.txt)
+do
     j=$(dirname $i)
     cp -r $j .
     k=$(basename $j)
     targets="$targets $(basename $j)"
 done
 for i in $(find . -name *.txt)
-do 
+do
     sed -i -e 's/<%= CosmosCfsConfig::PROCESSOR_ENDIAN %>/LITTLE_ENDIAN/; s/<%=CF_INCOMING_PDU_MID%>/0x1800/; s/<%=CF_SPACE_TO_GND_PDU_MID%>/0x0800/;' $i
 done
 cd ..
@@ -95,7 +126,12 @@ fi
 
 for i in $targets
 do
-    if [ "$i" != "SIM_42_TRUTH" -a "$i" != "SYSTEM" -a "$i" != "TO_DEBUG" ]
+    if [ "$i" = "SYSTEM" ]; then
+        echo "Skipping SYSTEM target because OpenC3 already defines SYSTEM"
+        continue
+    fi
+
+    if [ "$i" != "SIM_42_TRUTH" -a "$i" != "TO_DEBUG" ]
     then
         debug=$i"_DEBUG"
         radio=$i"_RADIO"
@@ -105,6 +141,7 @@ do
         echo TARGET $i $i >> plugin.txt
     fi
 done
+
 echo "" >> plugin.txt
 echo "INTERFACE DEBUG udp_interface.rb nos-fsw 5012 5013 nil nil 128 10.0 nil" >> plugin.txt
 for i in $targets
@@ -129,8 +166,8 @@ do
 done
 echo "" >> plugin.txt
 
-echo "INTERFACE SIM_42_TRUTH_INT udp_interface.rb host.docker.internal 5110 5111 nil nil 128 10.0 nil" >> plugin.txt
-echo "   MAP_TARGET SIM_42_TRUTH" >> plugin.txt
+# echo "INTERFACE SIM_42_TRUTH_INT udp_interface.rb host.docker.internal 5110 5111 nil nil 128 10.0 nil" >> plugin.txt
+# echo "   MAP_TARGET SIM_42_TRUTH" >> plugin.txt
 
 # Capture date created
 echo "" >> plugin.txt
@@ -157,7 +194,7 @@ echo ""
 
 # Load plugin
 echo "Load plugin..."
-$OPENC3_PATH cliroot load openc3-cosmos-nos3-1.0.$DATE.gem
+$OPENC3_PATH cli load openc3-cosmos-nos3-1.0.$DATE.gem
 echo ""
 
 ## Set permissions on build files
