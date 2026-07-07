@@ -9,6 +9,29 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source $SCRIPT_DIR/../../scripts/env.sh
 
+wait_for_container_running() {
+    local name="$1"
+    local timeout="${2:-60}"
+    local waited=0
+
+    echo "Waiting for Docker container '$name'..."
+
+    until [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = "true" ]; do
+        if [ "$waited" -ge "$timeout" ]; then
+            echo ""
+            echo "ERROR: Timed out waiting for Docker container '$name' to start."
+            echo ""
+            docker ps -a --filter "name=^/${name}$"
+            return 1
+        fi
+
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo "Container '$name' is running."
+}
+
 # Check that local NOS3 directory exists
 if [ ! -d $USER_NOS3_DIR ]; then
     echo ""
@@ -144,15 +167,33 @@ done
 
 echo "NOS Time Driver..."
 sleep 8
-gnome-terminal --tab --title="NOS Time Driver"   -- $DFLAGS -v $SIM_DIR:$SIM_DIR --name nos-time-driver --network=nos3-core -w $SIM_BIN $DBOX ./nos3-single-simulator $GND_CFG_FILE time
-sleep 1
+
+gnome-terminal --tab --title="NOS Time Driver" \
+    -- $DFLAGS \
+    -v $SIM_DIR:$SIM_DIR \
+    --name nos-time-driver \
+    --network=nos3-core \
+    -w $SIM_BIN \
+    $DBOX ./nos3-single-simulator $GND_CFG_FILE time
+
+wait_for_container_running nos-time-driver 60 || exit 1
+
 for (( i=1; i<=$SATNUM; i++ ))
 do
     export SC_NUM="sc0"$i
     export SC_NETNAME="nos3-"$SC_NUM
     export TIMENAME=$SC_NUM"-nos-time-driver"
-    $DNETWORK connect --alias nos-time-driver $SC_NETNAME nos-time-driver
+
+    echo "$SC_NUM - Connect NOS Time Driver to spacecraft network..."
+
+    # Avoid noisy failure if a previous partial launch already connected it.
+    if docker inspect -f '{{json .NetworkSettings.Networks}}' nos-time-driver 2>/dev/null | grep -q "\"$SC_NETNAME\""; then
+        echo "nos-time-driver is already connected to $SC_NETNAME"
+    else
+        $DNETWORK connect --alias nos-time-driver "$SC_NETNAME" nos-time-driver
+    fi
 done
+
 echo ""
 
 echo "Docker launch script completed!"
